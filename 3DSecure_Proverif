@@ -1,0 +1,65 @@
+free C, M, DS, ACS: channel.
+
+(* Shared keys *)
+free keyMC, keyDSM, keyACSDS, keyACSC: bitstring.
+private skM, skACS: bitstring. (* Secret keys for M and ACS. *)
+
+(* Cryptographic functions *)
+fun crypt(bitstring, bitstring): bitstring.
+fun sign(bitstring, bitstring): bitstring.
+
+(* Protocol steps *)
+
+(* Step 0: Purchase request *)
+(* C -> M : Purchase Request *)
+event purchase_request(C, M).
+
+(* Step 1: C -> M : {pan, expiry}{keyMC} *)
+let purchase_request1 = crypt(pan, expiry, keyMC).
+out(C, (M, purchase_request1)).
+
+(* Step 2: M -> DS : {pan, macqbin, mid, mpasswd}{keyDSM} *)
+let request_DS = crypt(pan, macqbin, mid, mpasswd, keyDSM).
+out(M, (DS, request_DS)).
+
+(* Step 2a: DS -> ACS : {pan, macqbin, mid, mpasswd}{keyACSDS} *)
+let request_ACS = crypt(pan, macqbin, mid, mpasswd, keyACSDS).
+out(DS, (ACS, request_ACS)).
+
+(* Step 3: ACS -> DS : {panyes, acctid, url, proto}{keyACSDS} *)
+let response_DS = crypt(panyes, acctid, url, proto, keyACSDS).
+out(ACS, (DS, response_DS)).
+
+(* Step 3a: DS -> M : {panyes, acctid, url, proto}{keyDSM} *)
+let response_M = crypt(panyes, acctid, url, proto, keyDSM).
+out(DS, (M, response_M)).
+
+(* Step 4: M -> C : {{macqbin, mid, mname, murl, xid, pdate, pamt, expiry, acctid}{SK(M)} % pareq }{keyMC} *)
+let pareq = crypt(macqbin, mid, mname, murl, xid, pdate, pamt, expiry, acctid, skM).
+let CPAreq = crypt(pareq, keyMC).
+out(M, (C, CPAreq)).
+
+(* Step 4a: C -> ACS : {pareq % {macqbin, mid, mname, murl, xid, pdate, pamt, expiry, acctid}{SK(M)}}{keyACSC} *)
+let CPAreq_C = crypt(pareq, keyACSC).
+out(C, (ACS, CPAreq_C)).
+
+(* Step 5: ACS -> C : {mname, pamt, pdate, panshort, expiry}{keyACSC} *)
+let PATranReq = crypt(mname, pamt, pdate, panshort, expiry, keyACSC).
+out(ACS, (C, PATranReq)).
+
+(* Step 6: C -> ACS : {password}{keyACSC} *)
+let PATranRes = crypt(password, keyACSC).
+out(C, (ACS, PATranRes)).
+
+(* Step 7: ACS -> C : {{macqbin, mid, xid, pdate, pamt, panshort, datetime, transtatus, cavv, eci, cavvalg}{SK(ACS)} % pares}{keyACSC} *)
+let pares = crypt(macqbin, mid, xid, pdate, pamt, panshort, datetime, transtatus, cavv, eci, cavvalg, skACS).
+let CPARes_C = crypt(pares, keyACSC).
+out(ACS, (C, CPARes_C)).
+
+(* Step 7a: C -> M : {pares % {macqbin, mid, xid, pdate, pamt, panshort, datetime, transtatus, cavv, eci, cavvalg}{SK(ACS)}}{keyMC} *)
+let CPARes_M = crypt(pares, keyMC).
+out(C, (M, CPARes_M)).
+
+(* Step 8: M -> C : {{transtatus}{keyMC}}{SK(M)} *)
+let payment_confirm = crypt(transtatus, keyMC, skM).
+out(M, (C, payment_confirm)).
