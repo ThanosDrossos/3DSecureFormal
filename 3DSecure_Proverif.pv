@@ -12,7 +12,6 @@ free pan, expiry, macqbin, mid, mpasswd, panyes, acctid, url, proto,
 (* Cryptographic functions *)
 fun crypt(bitstring, bitstring, bitstring): bitstring.
 fun sign(bitstring, bitstring): bitstring.
-
 (* Protocol steps *)
 
 (* Step 0: Purchase request *)
