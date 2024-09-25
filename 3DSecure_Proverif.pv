@@ -2,10 +2,15 @@ free C, M, DS, ACS: channel.
 
 (* Shared keys *)
 free keyMC, keyDSM, keyACSDS, keyACSC: bitstring.
-private skM, skACS: bitstring. (* Secret keys for M and ACS. *)
+free skM, skACS: bitstring [private]. (* Secret keys for M and ACS. *)
+
+(* Declare other bitstrings that are used *)
+free pan, expiry, macqbin, mid, mpasswd, panyes, acctid, url, proto, 
+     mname, xid, pdate, pamt, panshort, datetime, transtatus, cavv, 
+     eci, cavvalg, password: bitstring.
 
 (* Cryptographic functions *)
-fun crypt(bitstring, bitstring): bitstring.
+fun crypt(bitstring, bitstring, bitstring): bitstring.
 fun sign(bitstring, bitstring): bitstring.
 
 (* Protocol steps *)
