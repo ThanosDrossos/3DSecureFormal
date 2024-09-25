@@ -17,10 +17,10 @@ fun sign(bitstring, bitstring): bitstring.
 (* Step 0: Purchase request *)
 (* C -> M : Purchase Request *)
 event purchase_request(C, M).
-
 (* Step 1: C -> M : {pan, expiry}{keyMC} *)
-let purchase_request1 = crypt(pan, expiry, keyMC).
-out(C, (M, purchase_request1)).
+let purchase_request1 = 
+    crypt(pan, expiry, keyMC)
+    out(C, (M, purchase_request1)).
 
 (* Step 2: M -> DS : {pan, macqbin, mid, mpasswd}{keyDSM} *)
 let request_DS = crypt(pan, macqbin, mid, mpasswd, keyDSM).
