@@ -1,69 +1,133 @@
-free C, M, DS, ACS: channel.
+(* Types *)
+type pan [bounded].  (* Primary Account Number *)
+type expiry [bounded].  (* Expiry Date *)
+type securecode [bounded].  (* Secure Code *)
+type amt [bounded].  (* Transaction amount *)
+type mname [bounded].  (* Merchant name *)
+type currency [bounded].  (* Transaction currency *)
+type country [bounded].  (* Country information *)
+type mts [bounded].  (* Message timestamp *)
 
-(* Shared keys *)
-free keyMC, keyDSM, keyACSDS, keyACSC: bitstring.
-free skM, skACS: bitstring [private]. (* Secret keys for M and ACS. *)
+(* Keys *)
+type key [private].  (* Symmetric key type *)
 
-(* Declare other bitstrings that are used *)
-free pan, expiry, macqbin, mid, mpasswd, panyes, acctid, url, proto, 
-     mname, xid, pdate, pamt, panshort, datetime, transtatus, cavv, 
-     eci, cavvalg, password: bitstring.
+(* Nonces *)
+type nonce [large].
 
-(* Cryptographic functions *)
-fun crypt(bitstring, bitstring, bitstring): bitstring.
-fun sign(bitstring, bitstring): bitstring.
-(* Protocol steps *)
+(* Channels *)
+channel start, c1, c2, c3, c4, c5, c6, c7, c8.
 
-(* Step 0: Purchase request *)
-(* C -> M : Purchase Request *)
-event purchase_request(C, M).
-(* Step 1: C -> M : {pan, expiry}{keyMC} *)
-let purchase_request1 = 
-    crypt(pan, expiry, keyMC)
-    out(C, (M, purchase_request1)).
+(* Parameters for entities *)
+const C: host.  (* Customer *)
+const M: host.  (* Merchant *)
+const ACS: host.  (* Access Control Server *)
 
-(* Step 2: M -> DS : {pan, macqbin, mid, mpasswd}{keyDSM} *)
-let request_DS = crypt(pan, macqbin, mid, mpasswd, keyDSM).
-out(M, (DS, request_DS)).
+(* Symmetric encryption and decryption *)
+fun encrypt(bitstring, key): bitstring.
+fun decrypt(bitstring, key): bitstring.
 
-(* Step 2a: DS -> ACS : {pan, macqbin, mid, mpasswd}{keyACSDS} *)
-let request_ACS = crypt(pan, macqbin, mid, mpasswd, keyACSDS).
-out(DS, (ACS, request_ACS)).
+(* Public/Private key pair for ACS *)
+fun skgen(nonce): key.  (* Secret key generation for ACS *)
+fun pkgen(nonce): key.  (* Public key generation for ACS *)
 
-(* Step 3: ACS -> DS : {panyes, acctid, url, proto}{keyACSDS} *)
-let response_DS = crypt(panyes, acctid, url, proto, keyACSDS).
-out(ACS, (DS, response_DS)).
+(* Signature verification *)
+fun sign(bitstring, key): bitstring.
+fun check(bitstring, key, bitstring): bool.  (* Signature verification *)
 
-(* Step 3a: DS -> M : {panyes, acctid, url, proto}{keyDSM} *)
-let response_M = crypt(panyes, acctid, url, proto, keyDSM).
-out(DS, (M, response_M)).
+(* Events *)
+event authRequestCtoM(host, pan, amt, mname).  (* Customer authenticates with Merchant *)
+event authResponseAtoC(host, amt, securecode).  (* ACS authenticates with Customer *)
+event paymentConfirmedMtoC(host, amt, mname).  (* Payment confirmation *)
 
-(* Step 4: M -> C : {{macqbin, mid, mname, murl, xid, pdate, pamt, expiry, acctid}{SK(M)} % pareq }{keyMC} *)
-let pareq = crypt(macqbin, mid, mname, murl, xid, pdate, pamt, expiry, acctid, skM).
-let CPAreq = crypt(pareq, keyMC).
-out(M, (C, CPAreq)).
+(* Confidentiality events *)
+event confidentialDataSent(host, pan, expiry, securecode).
+event confidentialDataReceived(host, pan, expiry, securecode).
 
-(* Step 4a: C -> ACS : {pareq % {macqbin, mid, mname, murl, xid, pdate, pamt, expiry, acctid}{SK(M)}}{keyACSC} *)
-let CPAreq_C = crypt(pareq, keyACSC).
-out(C, (ACS, CPAreq_C)).
+let processC(kMC: key, kAC: key) =
+    new panC: pan;
+    new expiryC: expiry;
+    new amtC: amt;
+    new securecodeC: securecode;
+    new nonceC: nonce;
 
-(* Step 5: ACS -> C : {mname, pamt, pdate, panshort, expiry}{keyACSC} *)
-let PATranReq = crypt(mname, pamt, pdate, panshort, expiry, keyACSC).
-out(ACS, (C, PATranReq)).
+    (* Step 1: Customer sends Purchase Request to Merchant *)
+    out(c1, (C, "purchase request"));
 
-(* Step 6: C -> ACS : {password}{keyACSC} *)
-let PATranRes = crypt(password, keyACSC).
-out(C, (ACS, PATranRes)).
+    (* Step 2: Merchant sends Authorization Request to Customer *)
+    in(c2, encryptedRequestM: bitstring);
+    let decAuthReq = decrypt(encryptedRequestM, kMC) in
+    let (cityM, countryM, currencyM, amtM, mtsM, brandM, panM, expiryM, mnameM) = decAuthReq in
+    event authRequestCtoM(M, panM, amtM, mnameM);
+    event confidentialDataSent(C, panC, expiryC, securecodeC);
+    
+    (* Step 2a: Customer sends Authentication Request to ACS *)
+    let authReqACS = encrypt((cityM, countryM, currencyM, amtM, mtsM, brandM, panM, expiryM, mnameM), kAC) in
+    out(c3, authReqACS);
+    
+    (* Step 3: ACS sends Authentication Response to Customer *)
+    in(c4, encryptedResponseACS: bitstring);
+    let decAuthRes = decrypt(encryptedResponseACS, kAC) in
+    let (mnameA, amtA, panA, mesgA, expiryA) = decAuthRes in
+    event authResponseAtoC(ACS, amtA, securecodeC);
 
-(* Step 7: ACS -> C : {{macqbin, mid, xid, pdate, pamt, panshort, datetime, transtatus, cavv, eci, cavvalg}{SK(ACS)} % pares}{keyACSC} *)
-let pares = crypt(macqbin, mid, xid, pdate, pamt, panshort, datetime, transtatus, cavv, eci, cavvalg, skACS).
-let CPARes_C = crypt(pares, keyACSC).
-out(ACS, (C, CPARes_C)).
+    (* Step 4: Customer sends SecureCode to ACS *)
+    let secureCodeResponse = encrypt(securecodeC, kAC) in
+    out(c5, secureCodeResponse);
+    
+    (* Step 5a: Customer sends authorization value back to Merchant *)
+    in(c6, encryptedAuthValACS: bitstring);
+    let decAuthVal = decrypt(encryptedAuthValACS, kAC) in
+    let (aav, signatureACS) = decAuthVal in
+    if check(aav, kAC, signatureACS) then
+        let authValForMerchant = encrypt(aav, kMC) in
+        out(c7, authValForMerchant);
+    
+    (* Step 6: Merchant confirms the payment to Customer *)
+    in(c8, paymentConfirmationM: bitstring);
+    let decPayConfirm = decrypt(paymentConfirmationM, kMC) in
+    let (confirmM, mnameC, amtC) = decPayConfirm in
+    event paymentConfirmedMtoC(M, amtC, mnameC).
 
-(* Step 7a: C -> M : {pares % {macqbin, mid, xid, pdate, pamt, panshort, datetime, transtatus, cavv, eci, cavvalg}{SK(ACS)}}{keyMC} *)
-let CPARes_M = crypt(pares, keyMC).
-out(C, (M, CPARes_M)).
+let processM(kMC: key, kAC: key) =
+    in(c1, purchaseRequest: bitstring);
+    
+    (* Step 2: Merchant sends Authorization Request to Customer *)
+    new panM: pan;
+    new expiryM: expiry;
+    new amtM: amt;
+    new mnameM: mname;
+    let authReqCustomer = encrypt((cityM, countryM, currencyM, amtM, mtsM, brandM, panM, expiryM, mnameM), kMC) in
+    out(c2, authReqCustomer);
+    
+    (* Step 5a: Merchant receives authorization value *)
+    in(c7, authValCustomer: bitstring);
+    let decAuthValCustomer = decrypt(authValCustomer, kMC) in
+    let (aav, signatureCustomer) = decAuthValCustomer in
+    if check(aav, kAC, signatureCustomer) then
+        (* Step 6: Merchant confirms the payment *)
+        let paymentConfirmation = encrypt(("confirmed", mnameM, amtM), kMC) in
+        out(c8, paymentConfirmation).
 
-(* Step 8: M -> C : {{transtatus}{keyMC}}{SK(M)} *)
-let payment_confirm = crypt(transtatus, keyMC, skM).
-out(M, (C, payment_confirm)).
+let processACS(kAC: key) =
+    in(c3, authReqCustomer: bitstring);
+    let decAuthReq = decrypt(authReqCustomer, kAC) in
+    let (cityC, countryC, currencyC, amtC, mtsC, brandC, panC, expiryC, mnameC) = decAuthReq in
+    
+    (* Step 3: ACS sends Authentication Response to Customer *)
+    let authResCustomer = encrypt((mnameC, amtC, panC, "authenticated", expiryC), kAC) in
+    out(c4, authResCustomer);
+    
+    (* Step 5: ACS sends AAV back to Customer *)
+    new aav: bitstring;
+    let authVal = encrypt((aav, sign(aav, kAC)), kAC) in
+    out(c6, authVal).
+
+process
+    new rkC: key;  (* Key shared between C and M *)
+    new rkAC: key;  (* Key shared between C and ACS *)
+    ((!processC(rkC, rkAC)) | (!processM(rkC, rkAC)) | (!processACS(rkAC))).
+
+query x: bitstring; inj-event(authRequestCtoM(C, x, y, z)) ==> inj-event(authResponseAtoC(ACS, y, x)).
+query y: bitstring; inj-event(authResponseAtoC(ACS, x, y)) ==> inj-event(paymentConfirmedMtoC(M, x, y)).
+
+query z: bitstring; event(confidentialDataSent(C, x, y, z)) ==> event(confidentialDataReceived(M, x, y, z)).
