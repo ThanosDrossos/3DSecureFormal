@@ -41,19 +41,22 @@ equation forall x: bitstring, y: bitstring; snd(pair(x, y)) = y.
 
 (* Digital signature *)
 fun sign(bitstring, skey): bitstring [private].
-fun checksign(bitstring, pkey): bitstring.
 
 (* Public key function *)
 fun pk(skey): pkey.
 
-(* Signature Verification Property *)
-equation forall m: bitstring, sk: skey; 
-    checksign(sign(m, sk), pk(sk)) = m.
+const m: bitstring.
+const sk: skey.
+
+reduc checksign(sign(m, sk), pk(sk)) = m.
 
 (* Keys *)
 free keyMC: key [private].    (* Shared key between C and M *)
 free keyAC: key [private].    (* Shared key between C and ACS *)
 free SK_ACS: skey [private].  (* ACS's private signing key *)
+
+(* ACS's Public Key *)
+const PK_ACS: pkey.  (* ACS's public key known to everyone *)
 
 (* Constants representing transaction details *)
 const city: bitstring.
@@ -128,8 +131,9 @@ let M_process =
         let pan: bitstring = fst(pan_expiry) in
         let expiry: bitstring = snd(pan_expiry) in
         (
-            let transaction_details = pair(mname, amt) in
-            let bitstring2 = pair(city, pair(con, pair(curr, pair(amt, pair(mts, pair(brand, pair(pan, pair(expiry, mname)))))))) in
+            new nonce_M: bitstring;
+            let transaction_details = pair(nonce_M, pair(mname, amt)) in
+            let bitstring2 = pair(nonce_M, pair(city, pair(con, pair(curr, pair(amt, pair(mts, pair(brand, pair(pan, pair(expiry, mname))))))))) in
             out(c, senc(bitstring2, keyMC));
 
             in(c, msg5a: bitstring);
@@ -138,14 +142,13 @@ let M_process =
                 let avalue: bitstring = fst(bitstring5a) in
                 let signature: bitstring = snd(bitstring5a) in
                 (
-                    let signed_data = checksign(signature, pk(SK_ACS)) in
+                    let signed_data = checksign(signature, PK_ACS) in
                     let aav_received: bitstring = fst(signed_data) in
                     let rest: bitstring = snd(signed_data) in
                     let nonce_received: bitstring = fst(rest) in
                     let td_received: bitstring = snd(rest) in
                     event authentication_verified(aav_received, nonce_received, td_received);
-                    (* Verify that transaction details match *)
-                    if td_received = transaction_details then
+                    if nonce_received = nonce_M && td_received = transaction_details then
                         (
                             let bitstring6 = pair(cconfirm, transaction_details) in
                             out(c, senc(bitstring6, keyMC));
@@ -153,7 +156,6 @@ let M_process =
                         )
                     else
                         (
-                            (* Transaction details mismatch *)
                             out(c, senc(mismatch_msg, keyMC));
                             0
                         )
@@ -162,11 +164,13 @@ let M_process =
         )
     ).
 
+
 (* Process ACS *)
 let ACS_process =
     in(c, msg2a: bitstring);
     let bitstring2 = sdec(msg2a, keyAC) in
-    let (city_var: bitstring, rest1: bitstring) = bitstring2 in
+    let (nonce_M: bitstring, rest0: bitstring) = bitstring2 in
+    let (city_var: bitstring, rest1: bitstring) = rest0 in
     let (con_var: bitstring, rest2: bitstring) = rest1 in
     let (curr_var: bitstring, rest3: bitstring) = rest2 in
     let (amt_var: bitstring, rest4: bitstring) = rest3 in
@@ -183,7 +187,7 @@ let ACS_process =
         (
             new aav: bitstring;
             new nonce: bitstring;
-            let transaction_details = pair(mname_var, amt_var) in
+            let transaction_details = pair(nonce_M, pair(mname_var, amt_var)) in
             event aav_generated(aav, nonce, transaction_details);
 
             let data_to_sign = pair(aav, pair(nonce, transaction_details)) in
@@ -195,6 +199,7 @@ let ACS_process =
             )
         )
     ).
+
 
 (* Attacker Process: Tries to impersonate ACS *)
 let Attacker_process =
@@ -239,3 +244,80 @@ process
         (ACS_process) |
         (!Attacker_process)  (* The attacker can try multiple times *)
     )
+
+
+(*
+
+RESULTS:
+
+Completing equations...
+-- Process 1-- Query event(pan_generated(pan_2)) ==> attacker(pan_2) in process 1
+Translating the process into Horn clauses...
+select mess(c[],msg2_1)/-5000
+select mess(c[],senc(pair(pan_2,y),keyMC[]))/-5000
+select mess(c[],senc(pan_expiry_1,keyMC[]))/-5000
+Completing...
+select mess(c[],senc(pair(x,*signature_3),keyMC[]))/-5000
+select mess(c[],senc(pair(*avalue_2,y),keyMC[]))/-5000
+Starting query event(pan_generated(pan_2)) ==> attacker(pan_2)
+Inside query: trying to prove attacker(pan[])
+Completing...
+Inside query: proof failed
+goal reachable: event(pan_generated(pan[]))
+RESULT event(pan_generated(pan_2)) ==> attacker(pan_2) cannot be proved.
+-- Query event(expiry_generated(expiry_2)) ==> attacker(expiry_2) in process 1
+Translating the process into Horn clauses...
+select mess(c[],msg2_1)/-5000
+select mess(c[],senc(pair(pan_2,y),keyMC[]))/-5000
+select mess(c[],senc(pan_expiry_1,keyMC[]))/-5000
+Completing...
+select mess(c[],senc(pair(x,*signature_3),keyMC[]))/-5000
+select mess(c[],senc(pair(*avalue_2,y),keyMC[]))/-5000
+Starting query event(expiry_generated(expiry_2)) ==> attacker(expiry_2)
+Inside query: trying to prove attacker(expiry[])
+Completing...
+Inside query: proof failed
+goal reachable: event(expiry_generated(expiry[]))
+RESULT event(expiry_generated(expiry_2)) ==> attacker(expiry_2) cannot be proved.
+-- Query event(securecode_generated(securecode_2)) ==> attacker(securecode_2) in process 1
+Translating the process into Horn clauses...
+select mess(c[],msg2_1)/-5000
+select mess(c[],senc(pair(pan_2,y),keyMC[]))/-5000
+select mess(c[],senc(pan_expiry_1,keyMC[]))/-5000
+Completing...
+select mess(c[],senc(pair(x,*signature_3),keyMC[]))/-5000
+select mess(c[],senc(pair(*avalue_2,y),keyMC[]))/-5000
+Starting query event(securecode_generated(securecode_2)) ==> attacker(securecode_2)
+Inside query: trying to prove attacker(securecode[msg3 = msg3_1,msg2 = msg2_1]) from mess(c[],msg3_1) && mess(c[],msg2_1)
+Completing...
+Inside query: proof failed
+goal reachable: mess(c[],msg3_1) && mess(c[],msg2_1) -> event(securecode_generated(securecode_2))
+Abbreviations:
+securecode_2 = securecode[msg3 = msg3_1,msg2 = msg2_1]
+RESULT event(securecode_generated(securecode_2)) ==> attacker(securecode_2) cannot be proved.
+-- Query inj-event(authentication_verified(aav_1,n,td)) ==> inj-event(aav_generated(aav_1,n,td)) in process 1
+Translating the process into Horn clauses...
+select attacker(senc(pair(pan_2,y),keyMC[]))/-5000
+select attacker(senc(pan_expiry_1,keyMC[]))/-5000
+Completing...
+select attacker(senc(pair(x,*signature_3),keyMC[]))/-5000
+select attacker(senc(pair(*avalue_2,y),keyMC[]))/-5000
+Starting query inj-event(authentication_verified(aav_1,n,td)) ==> inj-event(aav_generated(aav_1,n,td))
+RESULT inj-event(authentication_verified(aav_1,n,td)) ==> inj-event(aav_generated(aav_1,n,td)) is true.
+
+--------------------------------------------------------------
+Verification summary:
+
+Query event(pan_generated(pan_2)) ==> attacker(pan_2) cannot be proved.
+
+Query event(expiry_generated(expiry_2)) ==> attacker(expiry_2) cannot be proved.
+
+Query event(securecode_generated(securecode_2)) ==> attacker(securecode_2) cannot be proved.
+
+Query inj-event(authentication_verified(aav_1,n,td)) ==> inj-event(aav_generated(aav_1,n,td)) is true.
+
+--------------------------------------------------------------
+
+
+
+*)
