@@ -1,0 +1,72 @@
+// 3D Secure Protocol in Verifpal
+// © Thanos Drossos, 2024
+
+attacker[active]
+
+// Setup
+
+principal Customer[
+    generates pan, expiry, securecode
+    generates sessionKeyC
+]
+
+principal Merchant[
+    generates nonceM
+    transactionDetails = CONCAT(nonceM, mname, amt, city, con, curr, mts, brand)
+]
+
+principal ACS[
+    generates aav, nonceACS
+]
+
+principal Customer[
+    sessionKey = ENC(keyCM, CONCAT(pan | expiry))
+]
+
+principal Merchant[
+    TransactionDetailsEnc = ENC(keyCM, transactionDetails)
+]
+
+principal ACS[
+    signsData = SIGN(keyACS, CONCAT(aav, nonceACS, transactionDetails))
+    SignedData = ENC(keyAC, CONCAT(aav, signsData))
+]
+
+// 1. Customer sends card details to Merchant
+Customer -> Merchant: sessionKey
+
+// 2. Merchant sends transaction details to Customer
+Merchant -> Customer: TransactionDetailsEnc
+
+// 3. Customer sends secure code and transaction details to ACS
+Customer -> ACS: ENC(keyAC, CONCAT(securecode, encTransactionDetails))
+
+// 4. ACS validates and sends authentication value to Customer
+ACS -> Customer: SignedData
+
+// 5. Customer forwards authentication value to Merchant
+Customer -> Merchant: ENC(keyCM, CONCAT(aav, signsData))
+
+// 6. Merchant confirms transaction
+Merchant -> Customer: ENC(keyCM, CONCAT(transactionDetails, confirmation))
+
+// Queries
+
+queries[
+
+    // Confidentiality of PAN
+    confidentiality? pan
+
+    // Confidentiality of expiry date
+    confidentiality? expiry
+
+    // Confidentiality of securecode
+    confidentiality? securecode
+
+    // Authentication of ACS to Customer
+    authentication? ACS -> Customer: SignedData
+
+    // Authentication of Customer to Merchant
+    authentication? Customer -> Merchant: ENC(keyCM, aav | signsData)
+
+]
