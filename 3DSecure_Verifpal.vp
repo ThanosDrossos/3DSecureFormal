@@ -6,49 +6,92 @@ attacker[active]
 // Setup
 
 principal Customer[
-    generates pan, expiry, securecode
-    generates sessionKeyC
+    knows private pan, expiry, securecode
+    knows private keyCM, keyAC
+    generates sessionKey
 ]
 
 principal Merchant[
-    generates nonceM
-    transactionDetails = CONCAT(nonceM, mname, amt, city, con, curr, mts, brand)
+    knows private keyCM, keyAM
 ]
 
 principal ACS[
-    generates aav, nonceACS
-]
-
-principal Customer[
-    sessionKey = ENC(keyCM, CONCAT(pan | expiry))
-]
-
-principal Merchant[
-    TransactionDetailsEnc = ENC(keyCM, transactionDetails)
-]
-
-principal ACS[
-    signsData = SIGN(keyACS, CONCAT(aav, nonceACS, transactionDetails))
-    SignedData = ENC(keyAC, CONCAT(aav, signsData))
+    knows private keyAC, keyAM
 ]
 
 // 1. Customer sends card details to Merchant
-Customer -> Merchant: sessionKey
+Customer -> Merchant: [sessionKey]
 
-// 2. Merchant sends transaction details to Customer
-Merchant -> Customer: TransactionDetailsEnc
+principal Customer[
+    purchaseRequestEnc = ENC(keyCM, CONCAT(pan, expiry))
+]
 
-// 3. Customer sends secure code and transaction details to ACS
-Customer -> ACS: ENC(keyAC, CONCAT(securecode, encTransactionDetails))
+Customer -> Merchant: purchaseRequestEnc
 
-// 4. ACS validates and sends authentication value to Customer
-ACS -> Customer: SignedData
+principal Merchant[
+    generates city, con, curr, amt, mts, brand, mname
+    purchaseRequestDec = DEC(keyCM, purchaseRequestEnc)
+    merchantDetails = CONCAT(city, con, curr, brand, mname)
+    transactionDetails = CONCAT(merchantDetails, amt, mts, purchaseRequestDec)
+    transactionDetailsEnc = ENC(keyCM, transactionDetails)
+]
 
-// 5. Customer forwards authentication value to Merchant
-Customer -> Merchant: ENC(keyCM, CONCAT(aav, signsData))
+Merchant -> Customer: transactionDetailsEnc
 
-// 6. Merchant confirms transaction
-Merchant -> Customer: ENC(keyCM, CONCAT(transactionDetails, confirmation))
+principal Customer[
+    transactionDetailsDec = DEC(keyCM, transactionDetailsEnc)
+    transactionDetailsEnc2 = ENC(keyAC, transactionDetailsDec)
+]
+
+Customer -> ACS: transactionDetailsEnc2
+
+principal ACS[
+    generates mesg
+    transactionDetailsDec2 = DEC(keyAC, transactionDetailsEnc2)
+    authRequest = CONCAT(transactionDetailsDec2, mesg)
+    authRequestEnc = ENC(keyAC, authRequest)
+]
+
+ACS -> Customer: authRequestEnc
+
+principal Customer[
+    authRequestDec = DEC(keyAC, authRequestEnc)
+    knows private securecode
+    securecodeEnc = ENC(keyAC, securecode)
+]
+
+Customer -> ACS: securecodeEnc
+
+principal ACS[
+    securecodeDec = DEC(keyAC, securecodeEnc)
+    generates aav
+    knows private aavSecretKey
+    aavEncrypted = PKE_ENC(G^aavSecretKey, aav)
+    generates avalue
+    authResponse = ENC(CONCAT(avalue, aavEncrypted), keyAC)
+]
+
+ACS -> Customer: authResponse
+
+principal Customer[
+    authResponseDec = DEC(keyAC, authResponse)
+    authResponseEnc2 = ENC(keyCM, authResponseDec)
+]
+
+Customer -> Merchant: authResponseEnc2
+
+principal Merchant[
+    authResponseDec2 = DEC(keyCM, authResponseEnc2)
+    generates cconfirm
+    confirmation = CONCAT(cconfirm, mname, amt)
+    confenc = ENC(keyCM, confirmation)
+]
+
+Merchant -> Customer: confenc
+
+principal Customer[
+    confirmationDec = DEC(keyCM, confenc)
+]
 
 // Queries
 
@@ -63,10 +106,19 @@ queries[
     // Confidentiality of securecode
     confidentiality? securecode
 
+    confidentiality? securecodeDec
+    confidentiality? authResponse
+    confidentiality? avalue
+    confidentiality? aav
+
     // Authentication of ACS to Customer
-    authentication? ACS -> Customer: SignedData
+    authentication? Customer -> Merchant: purchaseRequestEnc
+    authentication? Merchant -> Customer: transactionDetailsEnc
+    authentication? Customer -> ACS: transactionDetailsEnc2
+    authentication? ACS -> Customer: authRequestEnc
+    authentication? Customer -> ACS: securecodeEnc
+    authentication? ACS -> Customer: authResponse
 
-    // Authentication of Customer to Merchant
-    authentication? Customer -> Merchant: ENC(keyCM, aav | signsData)
-
+    // Customer confirmation should be fresh
+    freshness? cconfirm
 ]
