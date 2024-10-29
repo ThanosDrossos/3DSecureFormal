@@ -1,0 +1,198 @@
+(* 3D Secure Protocol in ProVerif *)
+(* © Thanos Drossos, 2024 *)
+
+(* Declare the public channel *)
+free c : channel.
+
+(* Cryptographic primitives *)
+
+(* Symmetric encryption *)
+fun cenc(bitstring, bitstring) : bitstring.
+fun cdec(bitstring, bitstring) : bitstring.
+equation forall k: bitstring, m: bitstring; cdec(cenc(k, m), k) = m.
+
+(* Public-key encryption *)
+fun pk(bitstring) : bitstring.
+fun pke_enc(bitstring, bitstring) : bitstring.
+fun pke_dec(bitstring, bitstring) : bitstring.
+equation forall k: bitstring, m: bitstring; pke_dec(k, pke_enc(pk(k), m)) = m.
+
+fun pair(bitstring, bitstring): bitstring.
+fun fst(bitstring): bitstring.
+fun snd(bitstring): bitstring.
+
+equation forall x: bitstring, y: bitstring; fst(pair(x, y)) = x.
+equation forall x: bitstring, y: bitstring; snd(pair(x, y)) = y.
+
+(* Private keys and secrets *)
+free keyCM : bitstring [private].   (* Key between Customer and Merchant *)
+free keyAC : bitstring [private].   (* Key between Customer and ACS *)
+free keyAM : bitstring [private].   (* Key between ACS and Merchant *)
+free aavSecretKey : bitstring [private]. (* ACS's secret key for AAV *)
+
+free pan : bitstring [private].
+free expiry : bitstring [private].
+free securecode : bitstring [private].
+free securecodeDec : bitstring [private].
+free authResponseDec : bitstring [private].
+free avalue : bitstring [private].
+free aav : bitstring [private].
+free cconfirm : bitstring [private].
+
+(* Events for confidentiality queries *)
+event secret_pan(bitstring).
+event secret_expiry(bitstring).
+event secret_securecode(bitstring).
+event secret_securecodeDec(bitstring).
+event secret_authResponseDec(bitstring).
+event secret_avalue(bitstring).
+event secret_aav(bitstring).
+event secret_cconfirm(bitstring).
+
+(* Events for authentication queries *)
+event send_purchaseRequestEnc(bitstring).
+event receive_purchaseRequestEnc(bitstring).
+event send_transactionDetailsEnc(bitstring).
+event receive_transactionDetailsEnc(bitstring).
+event send_transactionDetailsEnc2(bitstring).
+event receive_transactionDetailsEnc2(bitstring).
+event send_authRequestEnc(bitstring).
+event receive_authRequestEnc(bitstring).
+event send_securecodeEnc(bitstring).
+event receive_securecodeEnc(bitstring).
+event send_authResponse(bitstring).
+event receive_authResponse(bitstring).
+
+event generate_cconfirm(bitstring). (* Event for freshness of cconfirm *)
+
+(* Customer Process *)
+let Customer = 
+    event secret_pan(pan);
+    event secret_expiry(expiry);
+    event secret_securecode(securecode);
+    
+    new sessionKey: bitstring;     (* Generates sessionKey *)
+    out(c, sessionKey);            (* Sends sessionKey to Merchant *)
+    
+    let purchaseRequestEnc = cenc(keyCM, pair(pan, expiry)) in
+    event send_purchaseRequestEnc(purchaseRequestEnc);
+    out(c, purchaseRequestEnc);    (* Sends encrypted purchase request to Merchant *)
+    
+    in(c, transactionDetailsEnc: bitstring);
+    event receive_transactionDetailsEnc(transactionDetailsEnc);
+    let transactionDetailsDec = cdec(transactionDetailsEnc, keyCM) in
+    
+    let transactionDetailsEnc2 = cenc(keyAC, transactionDetailsDec) in
+    event send_transactionDetailsEnc2(transactionDetailsEnc2);
+    out(c, transactionDetailsEnc2); (* Sends encrypted transaction details to ACS *)
+    
+    in(c, authRequestEnc: bitstring);
+    event receive_authRequestEnc(authRequestEnc);
+    let authRequestDec = cdec(authRequestEnc, keyAC) in
+    
+    let securecodeEnc = cenc(keyAC, securecode) in
+    event send_securecodeEnc(securecodeEnc);
+    out(c, securecodeEnc);         (* Sends encrypted secure code to ACS *)
+    
+    in(c, authResponse: bitstring);
+    event receive_authResponse(authResponse);
+    let authResponseDec = cdec(authResponse, keyAC) in
+    event secret_authResponseDec(authResponseDec);
+    
+    let authResponseEnc2 = cenc(keyCM, authResponseDec) in
+    out(c, authResponseEnc2);      (* Sends encrypted auth response to Merchant *)
+    
+    in(c, confenc: bitstring);
+    let confirmationDec = cdec(confenc, keyCM) in (* Receives and decrypts confirmation *)
+    0.
+
+(* Merchant Process *)
+let Merchant =
+    in(c, sessionKey: bitstring); (* Receives sessionKey from Customer *)
+    in(c, purchaseRequestEnc: bitstring);
+    event receive_purchaseRequestEnc(purchaseRequestEnc);
+    let purchaseRequestDec = cdec(purchaseRequestEnc, keyCM) in
+    
+    new merchantDetails: bitstring;
+    
+    let transactionDetails = pair(merchantDetails, purchaseRequestDec) in
+    let transactionDetailsEnc = cenc(keyCM, transactionDetails) in
+    event send_transactionDetailsEnc(transactionDetailsEnc);
+    out(c, transactionDetailsEnc); (* Sends encrypted transaction details to Customer *)
+    
+    in(c, authResponseEnc2: bitstring);
+    let authResponseDec2 = cdec(authResponseEnc2, keyCM) in
+    
+    new cconfirm: bitstring;
+    new mname: bitstring;
+    event generate_cconfirm(cconfirm);
+    event secret_cconfirm(cconfirm);
+    let confirmation = pair(cconfirm, mname) in
+    let confenc = cenc(keyCM, confirmation) in
+    out(c, confenc);              (* Sends encrypted confirmation to Customer *)
+    0.
+
+(* ACS Process *)
+let ACS =
+    in(c, transactionDetailsEnc2: bitstring);
+    event receive_transactionDetailsEnc2(transactionDetailsEnc2);
+    let transactionDetailsDec2 = cdec(transactionDetailsEnc2, keyAC) in
+    new mesg: bitstring;
+    let authRequest = pair(transactionDetailsDec2, mesg) in
+    let authRequestEnc = cenc(keyAC, authRequest) in
+    event send_authRequestEnc(authRequestEnc);
+    out(c, authRequestEnc);       (* Sends encrypted auth request to Customer *)
+    
+    in(c, securecodeEnc: bitstring);
+    event receive_securecodeEnc(securecodeEnc);
+    let securecodeDec = cdec(securecodeEnc, keyAC) in
+    event secret_securecodeDec(securecodeDec);
+    
+    event secret_aav(aav);
+    let aavEncrypted = pke_enc(pk(aavSecretKey), aav) in
+    event secret_avalue(avalue);
+    let authResponse = cenc(keyAC, pair(avalue, aavEncrypted)) in
+    event send_authResponse(authResponse);
+    out(c, authResponse);         (* Sends encrypted auth response to Customer *)
+    0.
+
+(* Main Process *)
+
+(* Confidentiality Queries *)
+query x: bitstring; attacker(x) ==> event(secret_pan(x)).
+query x: bitstring; attacker(x) ==> event(secret_expiry(x)).
+query x: bitstring; attacker(x) ==> event(secret_securecode(x)).
+query x: bitstring; attacker(x) ==> event(secret_securecodeDec(x)).
+query x: bitstring; attacker(x) ==> event(secret_authResponseDec(x)).
+query x: bitstring; attacker(x) ==> event(secret_avalue(x)).
+query x: bitstring; attacker(x) ==> event(secret_aav(x)).
+query x: bitstring; attacker(x) ==> event(secret_cconfirm(x)).
+
+(* Confidentiality Queries *)
+query attacker(pan) ==> false.
+query attacker(expiry) ==> false.
+query attacker(securecode) ==> false.
+query attacker(securecodeDec) ==> false.
+query attacker(authResponseDec) ==> false.
+query attacker(avalue) ==> false.
+query attacker(aav) ==> false.
+query attacker(cconfirm) ==> false.
+
+
+(* Authentication Queries *)
+query x:bitstring; event(receive_purchaseRequestEnc(x)) ==> event(send_purchaseRequestEnc(x)).
+query x:bitstring; event(receive_transactionDetailsEnc(x)) ==> event(send_transactionDetailsEnc(x)).
+query x:bitstring; event(receive_transactionDetailsEnc2(x)) ==> event(send_transactionDetailsEnc2(x)).
+query x:bitstring; event(receive_authRequestEnc(x)) ==> event(send_authRequestEnc(x)).
+query x:bitstring; event(receive_securecodeEnc(x)) ==> event(send_securecodeEnc(x)).
+query x:bitstring; event(receive_authResponse(x)) ==> event(send_authResponse(x)).
+
+(* Freshness of cconfirm *)
+query cconfirm:bitstring; attacker(cconfirm) ==> event(secret_cconfirm(cconfirm)).
+
+process
+    (
+        Customer |
+        Merchant |
+        ACS
+    )

@@ -1,323 +1,350 @@
-(* 
-    Corrected 3D Secure Protocol Analysis
-    -------------------------------------
-    This code includes modifications to model possible impersonation attacks
-    by a third party, focusing on verifying the authentication property.
-
-    (c) Thanos Drossos, 2024
-*)
+(* 3D Secure Protocol with Intruder Modeling *)
 
 (* Types *)
-type key.  (* Symmetric keys used for encrypting messages between parties *)
-type skey. (* Private keys for asymmetric cryptography *)
-type pkey. (* Public keys for asymmetric cryptography *)
+type key.
+type skey [private].
+type pkey.
 
 (* Participants *)
-const C: bitstring.     (* Customer participating in the transaction *)
-const M: bitstring.     (* Merchant initiating the transaction *)
-const ACS: bitstring.   (* Access Control Server responsible for authentication *)
+const C: bitstring.       (* Customer *)
+const M: bitstring.       (* Merchant *)
+const ACS: bitstring.     (* Access Control Server *)
+const I: bitstring.       (* Intruder *)
 
 (* Channel *)
-channel c. (* Communication channel between participants *)
+channel c.
+free c_SSL: channel [private].
 
 (* Bitstring type *)
 
-(* Symmetric encryption *)
-fun senc(bitstring, key): bitstring.
-fun sdec(bitstring, key): bitstring.
+(* Cryptographic Primitives *)
+fun senc(key, bitstring): bitstring.
+reduc forall k: key, m: bitstring; sdec(k,senc(k, m)) = m.
 
-(* Symmetric encryption equations *)
-equation forall m: bitstring, k: key; sdec(senc(m, k), k) = m.
-
-(* Pairing and projections *)
-fun pair(bitstring, bitstring): bitstring.
-fun fst(bitstring): bitstring.
-fun snd(bitstring): bitstring.
-
-equation forall x: bitstring, y: bitstring; fst(pair(x, y)) = x.
-equation forall x: bitstring, y: bitstring; snd(pair(x, y)) = y.
-
-(* Asymmetric encryption *)
-
-(* Digital signature *)
-fun sign(bitstring, skey): bitstring [private].
-
-(* Public key function *)
 fun pk(skey): pkey.
+fun sign(bitstring, skey): bitstring.
+reduc forall m: bitstring, sk: skey; getmessage(sign(m, sk)) = m.
+reduc forall m: bitstring, sk: skey; checksign(sign(m, sk), pk(sk)) = m.
 
-const m: bitstring.
-const sk: skey.
+fun pke_enc(bitstring, pkey): bitstring.
+reduc forall m: bitstring, sk: skey; pke_dec(pke_enc(m, pk(sk)), sk) = m.
 
-reduc checksign(sign(m, sk), pk(sk)) = m.
+(* Pairing *)
+fun pair(bitstring, bitstring): bitstring.
+reduc forall x: bitstring, y: bitstring; fst(pair(x, y)) = x.
+reduc forall x: bitstring, y: bitstring; snd(pair(x, y)) = y.
 
 (* Keys *)
-free keyMC: key [private].    (* Shared key between C and M *)
-free keyAC: key [private].    (* Shared key between C and ACS *)
-free SK_ACS: skey [private].  (* ACS's private signing key *)
+(* Pre-shared symmetric keys between participants *)
+free keyCM: key [private].   (* Symmetric key shared between Customer and Merchant *)
+free keyAC: key [private].   (* Symmetric key shared between Customer and ACS *)
 
-(* ACS's Public Key *)
-const PK_ACS: pkey.  (* ACS's public key known to everyone *)
-
-(* Constants representing transaction details *)
-const city: bitstring.
-const con: bitstring.
-const curr: bitstring.
-const amt: bitstring.
-const mts: bitstring.
-const brand: bitstring.
-const mname: bitstring.
-const mesg: bitstring.
-const cconfirm: bitstring.
-const mismatch_msg: bitstring.
+(* Secrets *)
+free pan: bitstring [private].
+free expiry: bitstring [private].
+free securecode: bitstring [private].
 
 (* Events *)
-event aav_generated(bitstring, bitstring, bitstring).            (* AAV, nonce, transaction details *)
-event authentication_verified(bitstring, bitstring, bitstring).  (* AAV, nonce, transaction details *)
-event pan_generated(bitstring).
-event expiry_generated(bitstring).
-event securecode_generated(bitstring).
+(* Events for confidentiality queries *)
+event secret_pan(bitstring).
+event secret_expiry(bitstring).
+event secret_securecode(bitstring).
+event secret_securecodeDec(bitstring).
+event secret_authResponseDec(bitstring).
+event secret_avalue(bitstring).
+event secret_aav(bitstring).
+event secret_cconfirm(bitstring).
 
-(* Processes *)
 
-(* 
-   Process C (Customer)
-*)
-let C_process =
-    new pan: bitstring;
-    event pan_generated(pan);
-    new expiry: bitstring;
-    event expiry_generated(expiry);
-    (
-        out(c, senc(pair(pan, expiry), keyMC));
+(* Events for authentication queries *)
+event send_purchaseRequestEnc(bitstring, bitstring, bitstring).
+event receive_purchaseRequestEnc(bitstring, bitstring, bitstring).
+event send_transactionDetailsEnc(bitstring, bitstring).
+event receive_transactionDetailsEnc(bitstring, bitstring).
+event send_transactionDetailsEnc2(bitstring, bitstring).
+event receive_transactionDetailsEnc2(bitstring, bitstring).
+event send_authRequestEnc(bitstring, bitstring).
+event receive_authRequestEnc(bitstring, bitstring).
+event send_securecodeEnc(bitstring, bitstring).
+event receive_securecodeEnc(bitstring, bitstring).
+event send_authResponse(bitstring, bitstring).
+event receive_authResponse(bitstring, bitstring).
+event invalid_sender(bitstring).
+event invalid_signature(bitstring).
 
-        in(c, msg2: bitstring);
-        let bitstring2 = sdec(msg2, keyMC) in
-        (
-            out(c, senc(bitstring2, keyAC));
+(* Events for freshness queries *)
 
-            in(c, msg3: bitstring);
-            let bitstring3 = sdec(msg3, keyAC) in
-            (
-                new securecode: bitstring;
-                event securecode_generated(securecode);
-                (
-                    out(c, senc(securecode, keyAC));
+event generate_cconfirm(bitstring). (* Event for freshness of cconfirm *)
 
-                    in(c, msg5: bitstring);
-                    let bitstring5 = sdec(msg5, keyAC) in
-                    (
-                        let avalue: bitstring = fst(bitstring5) in
-                        let signature: bitstring = snd(bitstring5) in 
-                        (
-                            out(c, senc(pair(avalue, signature), keyMC));
+(* Customer Process *)
+let processCustomer(SK_C:skey, PK_M:pkey, PK_ACS:pkey) =
+    new nonceC1: bitstring;        (* Nonce generated by Customer for Merchant *)
+    new nonceC2: bitstring;        (* Nonce generated by Customer for ACS *)
 
-                            in(c, msg6: bitstring);
-                            let bitstring6 = sdec(msg6, keyMC) in
+    (* Step 1: Customer sends purchase request to Merchant *)
+    let purchaseRequest = pair(pair(pan, expiry), pair(nonceC1, C)) in
+    let signature_C = sign(purchaseRequest, SK_C) in
+    let purchaseRequestMessage = pair(purchaseRequest, signature_C) in
+    let purchaseRequestEnc = senc(keyCM, purchaseRequestMessage) in
+    event send_purchaseRequestEnc(purchaseRequestEnc, nonceC1, C);
+    out(c, purchaseRequestEnc);
+
+    (* Step 2: Customer receives transaction details from Merchant *)
+    in(c, transactionDetailsEnc: bitstring);
+    event receive_transactionDetailsEnc(transactionDetailsEnc, nonceC1);
+    let transactionDetailsMessageDec = sdec(keyCM, transactionDetailsEnc) in
+    let transactionDetailsMessage = fst(transactionDetailsMessageDec) in
+    let signature_M = snd(transactionDetailsMessageDec) in
+    (* Verify Merchant's signature *)
+    if checksign(signature_M, PK_M) = transactionDetailsMessage then
+        let transactionDetails = fst(transactionDetailsMessage) in
+        let nonceM1 = fst(transactionDetails) in
+        let merchantDetails = snd(transactionDetails) in
+        let nonceC1_received = snd(transactionDetailsMessage) in
+        if nonceC1_received = nonceC1 then
+            (* Step 3: Customer sends transaction details to ACS *)
+            let transactionDetailsForACS = pair(transactionDetails, pair(nonceC2, C)) in
+            let signature_C_ACS = sign(transactionDetailsForACS, SK_C) in
+            let transactionDetailsEnc2 = senc(keyAC, pair(transactionDetailsForACS, signature_C_ACS)) in
+            event send_transactionDetailsEnc2(transactionDetailsEnc2, nonceC2);
+            out(c, transactionDetailsEnc2);
+
+            (* Step 4: Customer receives auth request from ACS *)
+            in(c, authRequestEnc: bitstring);
+            event receive_authRequestEnc(authRequestEnc, nonceC2);
+            let authRequestMessageDec = sdec(keyAC, authRequestEnc) in
+            let authRequestMessage = fst(authRequestMessageDec) in
+            let signature_ACS = snd(authRequestMessageDec) in
+            (* Verify ACS's signature *)
+            if checksign(signature_ACS, PK_ACS) = authRequestMessage then
+                let authRequest = fst(authRequestMessage) in
+                let nonceC2_received = snd(authRequestMessage) in
+                if nonceC2_received = nonceC2 then
+                    let nonceACS = fst(authRequest) in
+                    let acsDetails = snd(authRequest) in
+                    (* Step 5: Customer sends secure code to ACS *)
+                    let securecodeMessage = pair(securecode, nonceACS) in
+                    let signature_C_securecode = sign(securecodeMessage, SK_C) in
+                    let securecodeEnc = senc(keyAC, pair(securecodeMessage, signature_C_securecode)) in
+                    event send_securecodeEnc(securecodeEnc, nonceACS);
+                    out(c, securecodeEnc);
+
+                    (* Step 6: Customer receives auth response from ACS *)
+                    in(c, authResponseEnc: bitstring);
+                    event receive_authResponse(authResponseEnc, nonceACS);
+                    let authResponseMessageDec = sdec(keyAC, authResponseEnc) in
+                    let authResponseMessage = fst(authResponseMessageDec) in
+                    let signature_ACS_resp = snd(authResponseMessageDec) in
+                    (* Verify ACS's signature *)
+                    if checksign(signature_ACS_resp, PK_ACS) = authResponseMessage then
+                        let authResponse = fst(authResponseMessage) in
+                        let nonceACS_received = snd(authResponseMessage) in
+                        if nonceACS_received = nonceACS then
+                            (* Step 7: Customer sends auth response to Merchant *)
+                            let authResponseEnc2 = senc(keyCM, pair(authResponseMessage, signature_ACS_resp)) in
+                            out(c, authResponseEnc2);
+
+                            (* Step 8: Customer receives confirmation from Merchant *)
+                            in(c, confenc: bitstring);
+                            let confirmationMessageDec = sdec(keyCM, confenc) in
+                            let confirmationMessage = fst(confirmationMessageDec) in
+                            let signature_M_conf = snd(confirmationMessageDec) in
+                            (* Verify Merchant's signature *)
+                            if checksign(signature_M_conf, PK_M) = confirmationMessage then
+                                let cconfirm = fst(confirmationMessage) in
+                                let nonceM1_received = snd(confirmationMessage) in
+                                if nonceM1_received = nonceM1 then
+                                    (* Successful completion *)
+                                    0
+                                else
+                                    event invalid_sender(nonceM1_received);
+                                    0
+                            else
+                                event invalid_signature(signature_M_conf);
+                                0
+                        else
+                            event invalid_sender(nonceACS_received);
                             0
-                        )
-                    )
-                )
-            )
-        )
-    ).
-
-(* 
-   Process M (Merchant)
-*)
-let M_process =
-    in(c, msg1: bitstring);
-    let pan_expiry = sdec(msg1, keyMC) in
-    (
-        let pan: bitstring = fst(pan_expiry) in
-        let expiry: bitstring = snd(pan_expiry) in
-        (
-            new nonce_M: bitstring;
-            let transaction_details = pair(nonce_M, pair(mname, amt)) in
-            let bitstring2 = pair(nonce_M, pair(city, pair(con, pair(curr, pair(amt, pair(mts, pair(brand, pair(pan, pair(expiry, mname))))))))) in
-            out(c, senc(bitstring2, keyMC));
-
-            in(c, msg5a: bitstring);
-            let bitstring5a = sdec(msg5a, keyMC) in
-            (
-                let avalue: bitstring = fst(bitstring5a) in
-                let signature: bitstring = snd(bitstring5a) in
-                (
-                    let signed_data = checksign(signature, PK_ACS) in
-                    let aav_received: bitstring = fst(signed_data) in
-                    let rest: bitstring = snd(signed_data) in
-                    let nonce_received: bitstring = fst(rest) in
-                    let td_received: bitstring = snd(rest) in
-                    event authentication_verified(aav_received, nonce_received, td_received);
-                    if nonce_received = nonce_M && td_received = transaction_details then
-                        (
-                            let bitstring6 = pair(cconfirm, transaction_details) in
-                            out(c, senc(bitstring6, keyMC));
-                            0
-                        )
                     else
-                        (
-                            out(c, senc(mismatch_msg, keyMC));
-                            0
-                        )
-                )
-            )
-        )
-    ).
-
-
-(* Process ACS *)
-let ACS_process =
-    in(c, msg2a: bitstring);
-    let bitstring2 = sdec(msg2a, keyAC) in
-    let (nonce_M: bitstring, rest0: bitstring) = bitstring2 in
-    let (city_var: bitstring, rest1: bitstring) = rest0 in
-    let (con_var: bitstring, rest2: bitstring) = rest1 in
-    let (curr_var: bitstring, rest3: bitstring) = rest2 in
-    let (amt_var: bitstring, rest4: bitstring) = rest3 in
-    let (mts_var: bitstring, rest5: bitstring) = rest4 in
-    let (brand_var: bitstring, rest6: bitstring) = rest5 in
-    let (pan_var: bitstring, rest7: bitstring) = rest6 in
-    let (expiry_var: bitstring, mname_var: bitstring) = rest7 in
-    (
-        let bitstring3 = pair(mname_var, pair(amt_var, pair(pan_var, pair(mesg, expiry_var)))) in
-        out(c, senc(bitstring3, keyAC));
-
-        in(c, msg4: bitstring);
-        let securecode = sdec(msg4, keyAC) in
-        (
-            new aav: bitstring;
-            new nonce: bitstring;
-            let transaction_details = pair(nonce_M, pair(mname_var, amt_var)) in
-            event aav_generated(aav, nonce, transaction_details);
-
-            let data_to_sign = pair(aav, pair(nonce, transaction_details)) in
-            let signature: bitstring = sign(data_to_sign, SK_ACS) in
-            (
-                let bitstring5 = pair(aav, signature) in 
-                out(c, senc(bitstring5, keyAC));
+                        event invalid_signature(signature_ACS_resp);
+                        0
+                else
+                    event invalid_sender(nonceC2_received);
+                    0
+            else
+                event invalid_signature(signature_ACS);
                 0
-            )
-        )
-    ).
+        else
+            event invalid_sender(nonceC1_received);
+            0
+    else
+        event invalid_signature(signature_M);
+        0
+    .
 
+(* Merchant Process *)
+let processMerchant(PK_C:pkey, SK_M:skey, PK_ACS:pkey) =
+    new nonceM1: bitstring;        (* Nonce generated by Merchant *)
 
-(* Attacker Process: Tries to impersonate ACS *)
-let Attacker_process =
-    (* The attacker intercepts messages and tries to impersonate the ACS *)
-    (* For example, intercepting the securecode and sending its own aav and signature *)
-    in(c, intercepted_msg: bitstring);
-    (* Suppose the attacker can generate their own keys *)
-    new Fake_SK: skey;
-    let Fake_PK = pk(Fake_SK) in
-    (* The attacker creates a fake signature *)
-    new fake_aav: bitstring;
-    new fake_nonce: bitstring;
-    let fake_transaction_details = pair(mname, amt) in
-    let fake_data_to_sign = pair(fake_aav, pair(fake_nonce, fake_transaction_details)) in
-    let fake_signature = sign(fake_data_to_sign, Fake_SK) in
-    let fake_bitstring5 = pair(fake_aav, fake_signature) in
-    (* The attacker sends the fake authentication response to the customer *)
-    out(c, senc(fake_bitstring5, keyAC));
-    0.
+    (* Step 1: Merchant receives purchase request from Customer *)
+    in(c, purchaseRequestEnc: bitstring);
+    let purchaseRequestMessageDec = sdec(keyCM, purchaseRequestEnc) in
+    let purchaseRequestMessage = fst(purchaseRequestMessageDec) in
+    let signature_C = snd(purchaseRequestMessageDec) in
+    (* Verify Customer's signature *)
+    if checksign(signature_C, PK_C) = purchaseRequestMessage then
+        let purchaseRequest = fst(purchaseRequestMessage) in
+        let nonceC1_sender = snd(purchaseRequestMessage) in
+        let pan_expiry = fst(purchaseRequest) in
+        let nonceC1 = fst(nonceC1_sender) in
+        let sender = snd(nonceC1_sender) in
+        if sender = C then
+            event receive_purchaseRequestEnc(purchaseRequestEnc, nonceC1, sender);
+            (* Step 2: Merchant sends transaction details to Customer *)
+            let transactionDetails = pair(nonceM1, M) in
+            let transactionDetailsMessage = pair(transactionDetails, nonceC1) in
+            let signature_M = sign(transactionDetailsMessage, SK_M) in
+            let transactionDetailsEnc = senc(keyCM, pair(transactionDetailsMessage, signature_M)) in
+            event send_transactionDetailsEnc(transactionDetailsEnc, nonceC1);
+            out(c, transactionDetailsEnc);
 
-(* Queries for Security Verification *)
+            (* Step 7: Merchant receives auth response from Customer *)
+            in(c, authResponseEnc2: bitstring);
+            let authResponseMessageDec = sdec(keyCM, authResponseEnc2) in
+            let authResponseMessage = fst(authResponseMessageDec) in
+            let signature_ACS_resp = snd(authResponseMessageDec) in
+            (* Verify ACS's signature *)
+            if checksign(signature_ACS_resp, PK_ACS) = authResponseMessage then
+                let authResponse = fst(authResponseMessage) in
+                let nonceACS = snd(authResponseMessage) in
+                (* Step 8: Merchant sends confirmation to Customer *)
+                new cconfirm: bitstring;
+                let confirmationMessage = pair(nonceM1, cconfirm) in
+                let signature_M_conf = sign(confirmationMessage, SK_M) in
+                let confenc = senc(keyCM, pair(confirmationMessage, signature_M_conf)) in
+                out(c, confenc);
+                0
+            else
+                event invalid_signature(signature_ACS_resp);
+                0
+        else
+            event invalid_sender(sender);
+            0
+    else
+        event invalid_signature(signature_C);
+        0
+    .
 
-(* Confidentiality queries remain the same *)
-query pan: bitstring; event(pan_generated(pan)) ==> attacker(pan).
+(* ACS Process *)
+let processACS(PK_C:pkey, SK_ACS:skey, PK_M:pkey) =
+    new nonceACS: bitstring;       (* Nonce generated by ACS *)
 
-(* Query: Can an attacker obtain the card expiry date? *)
-query expiry: bitstring; event(expiry_generated(expiry)) ==> attacker(expiry).
+    (* Step 3: ACS receives transaction details from Customer *)
+    in(c, transactionDetailsEnc2: bitstring);
+    let transactionDetailsMessageDec = sdec(keyAC, transactionDetailsEnc2) in
+    let transactionDetailsMessage = fst(transactionDetailsMessageDec) in
+    let signature_C_ACS = snd(transactionDetailsMessageDec) in
+    (* Verify Customer's signature *)
+    if checksign(signature_C_ACS, PK_C) = transactionDetailsMessage then
+        let transactionDetails = fst(transactionDetailsMessage) in
+        let nonceC2_sender = snd(transactionDetailsMessage) in
+        let nonceC2 = fst(nonceC2_sender) in
+        let sender = snd(nonceC2_sender) in
+        if sender = C then
+            event receive_transactionDetailsEnc2(transactionDetailsEnc2, nonceC2);
+            (* Step 4: ACS sends auth request to Customer *)
+            let authRequest = pair(nonceACS, ACS) in
+            let authRequestMessage = pair(authRequest, nonceC2) in
+            let signature_ACS = sign(authRequestMessage, SK_ACS) in
+            let authRequestEnc = senc(keyAC, pair(authRequestMessage, signature_ACS)) in
+            event send_authRequestEnc(authRequestEnc, nonceC2);
+            out(c, authRequestEnc);
 
-(* Query: Can an attacker obtain the secure code? *)
-query securecode: bitstring; event(securecode_generated(securecode)) ==> attacker(securecode).
+            (* Step 5: ACS receives secure code from Customer *)
+            in(c, securecodeEnc: bitstring);
+            event receive_securecodeEnc(securecodeEnc, nonceACS);
+            let securecodeMessageDec = sdec(keyAC, securecodeEnc) in
+            let securecodeMessage = fst(securecodeMessageDec) in
+            let signature_C_securecode = snd(securecodeMessageDec) in
+            (* Verify Customer's signature *)
+            if checksign(signature_C_securecode, PK_C) = securecodeMessage then
+                let securecode_received = fst(securecodeMessage) in
+                let nonceACS_received = snd(securecodeMessage) in
+                if nonceACS_received = nonceACS then
+                    (* Step 6: ACS sends auth response to Customer *)
+                    new messageAuth: bitstring;
+                    let authResponse = pair(messageAuth, nonceACS) in
+                    let authResponseMessage = pair(authResponse, signature_ACS) in
+                    let signature_ACS_resp = sign(authResponseMessage, SK_ACS) in
+                    let authResponseEnc = senc(keyAC, pair(authResponseMessage, signature_ACS_resp)) in
+                    event send_authResponse(authResponseEnc, nonceACS);
+                    out(c, authResponseEnc);
+                    0
+                else
+                    event invalid_sender(nonceACS_received);
+                    0
+            else
+                event invalid_signature(signature_C_securecode);
+                0
+        else
+            event invalid_sender(sender);
+            0
+    else
+        event invalid_signature(signature_C_ACS);
+        0
+    .
 
-(* Modified Authentication Property Query *)
-(* Ensures that the authentication value corresponds to the correct transaction *)
-query aav: bitstring, n: bitstring, td: bitstring; 
-    inj-event(authentication_verified(aav, n, td)) ==> inj-event(aav_generated(aav, n, td)).
+(* Security Queries *)
+(* Confidentiality Queries *)
+query attacker(pan) ==> false.
+query attacker(securecode) ==> false.
 
-(* Main process including the attacker process *)
+(* Authentication Queries *)
+query nonceC1: bitstring, sender: bitstring, x: bitstring;
+  inj-event(receive_purchaseRequestEnc(x, nonceC1, sender)) ==>
+  inj-event(send_purchaseRequestEnc(x, nonceC1, sender)).
+
+query nonceC1: bitstring, x: bitstring;
+  inj-event(receive_transactionDetailsEnc(x, nonceC1)) ==>
+  inj-event(send_transactionDetailsEnc(x, nonceC1)).
+
+query nonceC2: bitstring, x: bitstring;
+  inj-event(receive_transactionDetailsEnc2(x, nonceC2)) ==>
+  inj-event(send_transactionDetailsEnc2(x, nonceC2)).
+
+query nonceC2: bitstring, x: bitstring;
+  inj-event(receive_authRequestEnc(x, nonceC2)) ==>
+  inj-event(send_authRequestEnc(x, nonceC2)).
+
+query nonceACS: bitstring, x: bitstring;
+  inj-event(receive_securecodeEnc(x, nonceACS)) ==>
+  inj-event(send_securecodeEnc(x, nonceACS)).
+
+query nonceACS: bitstring, x: bitstring;
+  inj-event(receive_authResponse(x, nonceACS)) ==>
+  inj-event(send_authResponse(x, nonceACS)).
+
+(* Main Process *)
 process
-    (
-        (C_process) |
-        (M_process) |
-        (ACS_process) |
-        (!Attacker_process)  (* The attacker can try multiple times *)
+    new SK_C: skey;
+    let PK_C = pk(SK_C) in out(c, PK_C);
+    new SK_M: skey;
+    let PK_M = pk(SK_M) in out(c, PK_M);
+    new SK_ACS: skey;
+    let PK_ACS = pk(SK_ACS) in out(c, PK_ACS);
+    (   
+        !processCustomer(SK_C, PK_M, PK_ACS) |
+        !processMerchant(PK_C, SK_M, PK_ACS) |
+        !processACS(PK_C, SK_ACS, PK_M)
     )
-
-
 (*
 
-RESULTS:
+DUDAS:
 
-Completing equations...
--- Process 1-- Query event(pan_generated(pan_2)) ==> attacker(pan_2) in process 1
-Translating the process into Horn clauses...
-select mess(c[],msg2_1)/-5000
-select mess(c[],senc(pair(pan_2,y),keyMC[]))/-5000
-select mess(c[],senc(pan_expiry_1,keyMC[]))/-5000
-Completing...
-select mess(c[],senc(pair(x,*signature_3),keyMC[]))/-5000
-select mess(c[],senc(pair(*avalue_2,y),keyMC[]))/-5000
-Starting query event(pan_generated(pan_2)) ==> attacker(pan_2)
-Inside query: trying to prove attacker(pan[])
-Completing...
-Inside query: proof failed
-goal reachable: event(pan_generated(pan[]))
-RESULT event(pan_generated(pan_2)) ==> attacker(pan_2) cannot be proved.
--- Query event(expiry_generated(expiry_2)) ==> attacker(expiry_2) in process 1
-Translating the process into Horn clauses...
-select mess(c[],msg2_1)/-5000
-select mess(c[],senc(pair(pan_2,y),keyMC[]))/-5000
-select mess(c[],senc(pan_expiry_1,keyMC[]))/-5000
-Completing...
-select mess(c[],senc(pair(x,*signature_3),keyMC[]))/-5000
-select mess(c[],senc(pair(*avalue_2,y),keyMC[]))/-5000
-Starting query event(expiry_generated(expiry_2)) ==> attacker(expiry_2)
-Inside query: trying to prove attacker(expiry[])
-Completing...
-Inside query: proof failed
-goal reachable: event(expiry_generated(expiry[]))
-RESULT event(expiry_generated(expiry_2)) ==> attacker(expiry_2) cannot be proved.
--- Query event(securecode_generated(securecode_2)) ==> attacker(securecode_2) in process 1
-Translating the process into Horn clauses...
-select mess(c[],msg2_1)/-5000
-select mess(c[],senc(pair(pan_2,y),keyMC[]))/-5000
-select mess(c[],senc(pan_expiry_1,keyMC[]))/-5000
-Completing...
-select mess(c[],senc(pair(x,*signature_3),keyMC[]))/-5000
-select mess(c[],senc(pair(*avalue_2,y),keyMC[]))/-5000
-Starting query event(securecode_generated(securecode_2)) ==> attacker(securecode_2)
-Inside query: trying to prove attacker(securecode[msg3 = msg3_1,msg2 = msg2_1]) from mess(c[],msg3_1) && mess(c[],msg2_1)
-Completing...
-Inside query: proof failed
-goal reachable: mess(c[],msg3_1) && mess(c[],msg2_1) -> event(securecode_generated(securecode_2))
-Abbreviations:
-securecode_2 = securecode[msg3 = msg3_1,msg2 = msg2_1]
-RESULT event(securecode_generated(securecode_2)) ==> attacker(securecode_2) cannot be proved.
--- Query inj-event(authentication_verified(aav_1,n,td)) ==> inj-event(aav_generated(aav_1,n,td)) in process 1
-Translating the process into Horn clauses...
-select attacker(senc(pair(pan_2,y),keyMC[]))/-5000
-select attacker(senc(pan_expiry_1,keyMC[]))/-5000
-Completing...
-select attacker(senc(pair(x,*signature_3),keyMC[]))/-5000
-select attacker(senc(pair(*avalue_2,y),keyMC[]))/-5000
-Starting query inj-event(authentication_verified(aav_1,n,td)) ==> inj-event(aav_generated(aav_1,n,td))
-RESULT inj-event(authentication_verified(aav_1,n,td)) ==> inj-event(aav_generated(aav_1,n,td)) is true.
+1. How can SSL be modeled? Do I need to introduce a seperate SessionKey or is it fine using standard symmetric encryption? Private channel?
 
---------------------------------------------------------------
-Verification summary:
+2. Do I need to model the attacker explicitly? Are attacker processes needed?
 
-Query event(pan_generated(pan_2)) ==> attacker(pan_2) cannot be proved.
-
-Query event(expiry_generated(expiry_2)) ==> attacker(expiry_2) cannot be proved.
-
-Query event(securecode_generated(securecode_2)) ==> attacker(securecode_2) cannot be proved.
-
-Query inj-event(authentication_verified(aav_1,n,td)) ==> inj-event(aav_generated(aav_1,n,td)) is true.
-
---------------------------------------------------------------
-
-
+3. Authentication fails if there are no nonces in the protocol. Should I model it with nonces, although they are not explicitly metionend in the 3D Secure protocol?
 
 *)

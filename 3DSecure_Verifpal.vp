@@ -107,7 +107,7 @@ queries[
     confidentiality? securecode
 
     confidentiality? securecodeDec
-    confidentiality? authResponse
+    confidentiality? authResponseDec
     confidentiality? avalue
     confidentiality? aav
 

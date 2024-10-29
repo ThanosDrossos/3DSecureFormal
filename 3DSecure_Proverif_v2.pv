@@ -32,7 +32,7 @@ fun sdec(bitstring, key): bitstring. (* Decrypt bitstring using key *)
 
 (* Symmetric encryption equations *)
 
-equation forall m: bitstring, k: key; sdec(senc(m, k), k) = m. (* Decryption of an encrypted message using the same key *)
+reduc forall m: bitstring, k: key; sdec(senc(m, k), k) = m. (* Decryption of an encrypted message using the same key *)
 
 (* Pairing and projections *)
 fun pair(bitstring, bitstring): bitstring.
@@ -42,21 +42,20 @@ fun snd(bitstring): bitstring.
 equation forall x: bitstring, y: bitstring; fst(pair(x, y)) = x. (*get first element*)
 equation forall x: bitstring, y: bitstring; snd(pair(x, y)) = y. (*get second element*)
 
-(* Asymmetric encryption *)
-
 (* Digital signature *)
-fun sign(bitstring, skey): bitstring [private].
-fun checksign(bitstring, pkey): bitstring.
+fun sign(bitstring, skey): bitstring.
+reduc forall x: bitstring, y: skey;
+    checksign(x,sign(x,y),pk(y)) = true.
 
-(* Public key function *)
+(* Public key encryption *)
+
 fun pk(skey): pkey.
+fun encrypt(bitstring, pkey): bitstring.
+reduc forall x: bitstring, y: skey; decrypt(encrypt(x,pk(y)),y) = x.
 
-(* Signature Verification Property:*)
-equation forall m: bitstring, sk: skey, n: bitstring; 
-    checksign(sign(pair(m, n), sk), pk(sk)) = pair(m, n).
 
 (* Keys *)
-free keyMC: key.    (* Shared key between C and M, assumed public and known to attacker *)
+free keyMC: key [private].    (* Shared key between C and M, assumed public and known to attacker *)
 free keyAC: key [private].    (* Shared key between C and ACS *)
 free SK_ACS: skey [private].  (* ACS's private signing key *)
 
