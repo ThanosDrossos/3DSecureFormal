@@ -472,3 +472,54 @@ process
         !processMerchant(PK_C, SK_M, PK_ACS, keyCM) |
         !processACS(PK_C, SK_ACS, PK_M, keyAC)
     )
+
+(* VERIFICATION RESULTS*)
+
+(*
+
+Verification summary:
+
+Query not attacker(pan[]) is true.
+
+Query not attacker(securecode[]) is true.
+
+Query not attacker(expiry[]) is true.
+
+Weak secret pan is true.
+
+Weak secret securecode is true.
+
+Weak secret expiry is true.
+
+Non-interference pan is true.
+
+Non-interference securecode is true.
+
+Non-interference expiry is true.
+
+Query not event(invalid_signature(x)) is false.
+
+Query not event(invalid_sender(x)) cannot be proved.
+
+Query not event(transactionEnd(x)) is false.
+
+Query inj-event(receive_purchaseRequestEnc(x,nonceC1_2,SessionID_3)) ==> inj-event(send_purchaseRequestEnc(x,nonceC1_2,SessionID_3)) cannot be proved.
+
+Query inj-event(receive_transactionDetailsEnc(x,nonceC1_2,SessionID_3)) ==> inj-event(send_transactionDetailsEnc(x,nonceC1_2,SessionID_3)) is true.
+
+Query inj-event(receive_transactionDetailsEnc2(x,nonceC2_2,SessionID_3)) ==> inj-event(send_transactionDetailsEnc2(x,nonceC2_2,SessionID_3)) cannot be proved.
+
+Query inj-event(receive_authRequestEnc(x,nonceC2_2,SessionID_3)) ==> inj-event(send_authRequestEnc(x,nonceC2_2,SessionID_3)) is true.
+
+Query inj-event(receive_securecodeEnc(x,nonceACS_1,SessionID_3)) ==> inj-event(send_securecodeEnc(x,nonceACS_1,SessionID_3)) is true.
+
+Query inj-event(receive_forward_authResponse(x,nonceACS_1,SessionID_3)) ==> inj-event(forward_authResponse(x,nonceACS_1,SessionID_3)) is true.
+
+Query inj-event(receive_authResponse(x,nonceACS2_1,SessionID_3)) ==> inj-event(send_authResponse(x,nonceACS2_1,SessionID_3)) cannot be proved.
+
+Query inj-event(receive_confirmation(x,nonceM2_1,SessionID_3)) ==> inj-event(send_confirmation(x,nonceM2_1,SessionID_3)) is true.
+
+Query inj-event(transactionEnd(SessionID_3)) ==> inj-event(transactionStart(SessionID_3)) is true.
+
+
+*)
